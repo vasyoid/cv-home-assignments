@@ -1,6 +1,6 @@
 click
-imageio
-moviepy
+imageio<=2.4.1
+moviepy<1.0.0
 numpy
 opencv-python
 pims
