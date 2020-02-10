@@ -36,16 +36,52 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
-    image_0 = frame_sequence[0]
+    block_size = 15
+    max_corners = 400
+    feature_params = dict(maxCorners=max_corners,
+                          qualityLevel=0.01,
+                          minDistance=block_size,
+                          useHarrisDetector=False,
+                          blockSize=block_size)
+    prev_image = frame_sequence[0]
+    prev_image *= 255
+    prev_image = prev_image.astype(np.uint8)
+    corners = cv2.goodFeaturesToTrack(image=prev_image, **feature_params)
+    _set_frame_corners(block_size, 0, np.arange(len(corners)), corners, builder)
+
+    indices = np.arange(corners.shape[0])
+    max_index = indices.size
+
+    for frame_ind, next_image in enumerate(frame_sequence[1:]):
+        next_image *= 255
+        next_image = next_image.astype(np.uint8)
+        corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_image, next_image, corners, None,
+                                                  winSize=(block_size, block_size), minEigThreshold=0.002)
+        good = st.reshape(-1).astype(np.bool)
+        indices = indices[good]
+        corners = corners[good]
+
+        if corners.shape[0] < max_corners:
+            feature_params['maxCorners'] = max_corners - corners.shape[0]
+            mask = np.full_like(next_image, 255)
+            for cx, cy in corners.reshape(-1, 2):
+                cv2.circle(mask, (cx, cy), block_size, 0, -1)
+            new_corners = cv2.goodFeaturesToTrack(next_image, mask=mask, **feature_params)
+            indices = np.append(indices, np.arange(max_index, max_index + new_corners.shape[0]))
+            max_index = indices[-1] + 1
+            corners = np.append(corners, new_corners).reshape((-1, 1, 2))
+        prev_image = next_image
+        _set_frame_corners(block_size, frame_ind + 1, indices, corners, builder)
+
+
+def _set_frame_corners(block_size: int, frame_ind: int, indices: np.ndarray, cv_corners: np.ndarray,
+                       builder: _CornerStorageBuilder):
     corners = FrameCorners(
-        np.array([0]),
-        np.array([[0, 0]]),
-        np.array([55])
+        indices,
+        cv_corners,
+        np.full(len(cv_corners), block_size)
     )
-    builder.set_corners_at_frame(0, corners)
-    for frame, image_1 in enumerate(frame_sequence[1:], 1):
-        builder.set_corners_at_frame(frame, corners)
-        image_0 = image_1
+    builder.set_corners_at_frame(frame_ind, corners)
 
 
 def build(frame_sequence: pims.FramesSequence,
