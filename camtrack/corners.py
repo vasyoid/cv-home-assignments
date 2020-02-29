@@ -36,11 +36,13 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
+    pixels_count = np.size(frame_sequence[0])
     block_size = 15
-    max_corners = 400
+    max_corners = pixels_count // 1500
+    min_distance = block_size * 2
     feature_params = dict(maxCorners=max_corners,
                           qualityLevel=0.01,
-                          minDistance=block_size,
+                          minDistance=min_distance,
                           useHarrisDetector=False,
                           blockSize=block_size)
     prev_image = frame_sequence[0]
