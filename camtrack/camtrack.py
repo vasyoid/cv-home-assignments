@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import cv2
 
+from _corners import filter_frame_corners
 from corners import CornerStorage
 from data3d import CameraParameters, PointCloud, Pose
 import frameseq
@@ -25,21 +26,22 @@ from _camtrack import (
     pose_to_view_mat3x4
 )
 
-triang_params = TriangulationParameters(max_reprojection_error=1,
-                                        min_triangulation_angle_deg=1.5,
-                                        min_depth=0.1)
-
-# 1, 1.5, 0.1 for fox_head_short
-# 10, 0.01, 0.1 for bike_translation_slow
 
 def track_and_calc_colors(camera_parameters: CameraParameters,
                           corner_storage: CornerStorage,
                           frame_sequence_path: str,
                           known_view_1: Optional[Tuple[int, Pose]] = None,
-                          known_view_2: Optional[Tuple[int, Pose]] = None) \
+                          known_view_2: Optional[Tuple[int, Pose]] = None,
+                          reproj_err: float = 1,
+                          min_angle: float = 1,
+                          min_depth: float = 0.1) \
         -> Tuple[List[Pose], PointCloud]:
     if known_view_1 is None or known_view_2 is None:
         raise NotImplementedError()
+
+    triang_params = TriangulationParameters(max_reprojection_error=reproj_err,
+                                            min_triangulation_angle_deg=min_angle,
+                                            min_depth=min_depth)
 
     rgb_sequence = frameseq.read_rgb_f32(frame_sequence_path)
     intrinsic_mat = to_opencv_camera_mat3x3(
@@ -49,9 +51,10 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     mat_1 = pose_to_view_mat3x4(known_view_1[1])
     mat_2 = pose_to_view_mat3x4(known_view_2[1])
 
-    points, ids = build_and_triangulate_correspondences(corner_storage, intrinsic_mat,
-                                                        known_view_1[0], mat_1,
-                                                        known_view_2[0], mat_2)
+    points, ids = build_and_triangulate_correspondences(intrinsic_mat,
+                                                        corner_storage[known_view_1[0]], mat_1,
+                                                        corner_storage[known_view_2[0]], mat_2,
+                                                        triang_params)
     if len(points) < 10:
         exit(0)
 
@@ -73,6 +76,8 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
                                              corners.ids.flatten(),
                                              return_indices=True)
             try:
+                if comm1.shape[0] < 10:
+                    raise
                 _, rvec, tvec, inliers = cv2.solvePnPRansac(point_cloud_builder.points[comm1],
                                                             corners.points[comm2],
                                                             intrinsic_mat,
@@ -89,12 +94,17 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
                 print(f'Tracking corners. [{cur_frame} frames of {total_frames}] no inliers')
                 continue
 
+            filtered_corners = filter_frame_corners(corner_storage[cur_frame], inliers.flatten())
+
             for another_frame in range(total_frames):
                 if another_frame == cur_frame or tracked_mats[another_frame] is None:
                     continue
-                points, ids = build_and_triangulate_correspondences(corner_storage, intrinsic_mat,
-                                                                    another_frame, tracked_mats[another_frame],
-                                                                    cur_frame, tracked_mats[cur_frame])
+                points, ids = build_and_triangulate_correspondences(intrinsic_mat,
+                                                                    corner_storage[another_frame],
+                                                                    tracked_mats[another_frame],
+                                                                    filtered_corners,
+                                                                    tracked_mats[cur_frame],
+                                                                    triang_params)
                 if len(ids) != 0:
                     point_cloud_builder.add_points(ids, points)
 
@@ -127,8 +137,8 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     return poses, point_cloud
 
 
-def build_and_triangulate_correspondences(corner_storage, intrinsic_mat, idx_1, mat_1, idx_2, mat_2):
-    correspondences = build_correspondences(corner_storage[idx_1], corner_storage[idx_2])
+def build_and_triangulate_correspondences(intrinsic_mat, corners_1, mat_1, corners_2, mat_2, triang_params):
+    correspondences = build_correspondences(corners_1, corners_2)
     if len(correspondences.ids) == 0:
         return [], []
     points, ids, _ = triangulate_correspondences(correspondences,

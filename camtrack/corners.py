@@ -69,9 +69,10 @@ def _build_impl(frame_sequence: pims.FramesSequence,
             for cx, cy in corners.reshape(-1, 2):
                 cv2.circle(mask, (cx, cy), block_size, 0, -1)
             new_corners = cv2.goodFeaturesToTrack(next_image, mask=mask, **feature_params)
-            indices = np.append(indices, np.arange(max_index, max_index + new_corners.shape[0]))
-            max_index = indices[-1] + 1
-            corners = np.append(corners, new_corners).reshape((-1, 1, 2))
+            if new_corners is not None:
+                indices = np.append(indices, np.arange(max_index, max_index + new_corners.shape[0]))
+                max_index = indices[-1] + 1
+                corners = np.append(corners, new_corners).reshape((-1, 1, 2))
         prev_image = next_image
         _set_frame_corners(block_size, frame_ind + 1, indices, corners, builder)
 

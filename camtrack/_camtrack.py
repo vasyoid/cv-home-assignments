@@ -121,7 +121,6 @@ Correspondences = namedtuple(
     ('ids', 'points_1', 'points_2')
 )
 
-
 TriangulationParameters = namedtuple(
     'TriangulationParameters',
     ('max_reprojection_error', 'min_triangulation_angle_deg', 'min_depth')
@@ -252,7 +251,6 @@ def rodrigues_and_translation_to_view_mat3x4(r_vec: np.ndarray,
 
 
 class PointCloudBuilder:
-
     __slots__ = ('_ids', '_points', '_colors')
 
     def __init__(self, ids: np.ndarray = None, points: np.ndarray = None,
@@ -381,11 +379,11 @@ def calc_point_cloud_colors(pc_builder: PointCloudBuilder,
                 errors = np.nan_to_num(errors)
 
             consistency_mask = (
-                (errors <= max_reproj_error) &
-                (corners.points[:, 0] >= 0) &
-                (corners.points[:, 1] >= 0) &
-                (corners.points[:, 0] < image.shape[1] - 0.5) &
-                (corners.points[:, 1] < image.shape[0] - 0.5)).flatten()
+                    (errors <= max_reproj_error) &
+                    (corners.points[:, 0] >= 0) &
+                    (corners.points[:, 1] >= 0) &
+                    (corners.points[:, 0] < image.shape[1] - 0.5) &
+                    (corners.points[:, 1] < image.shape[0] - 0.5)).flatten()
             ids_to_process = corners.ids[consistency_mask].flatten()
             corner_points = np.round(
                 corners.points[consistency_mask]
@@ -425,8 +423,15 @@ def create_cli(track_and_calc_colors):
                   help=frame_1_help)
     @click.option('--frame-2', default=1, type=click.IntRange(0),
                   help=frame_2_help)
+    @click.option('--reproj-err', default=1, type=click.FloatRange(0),
+                  help='maximum reprojection error')
+    @click.option('--min-angle', default=1, type=click.FloatRange(0),
+                  help='minimum triangulation angle')
+    @click.option('--min-depth', default=0.1, type=click.FloatRange(0),
+                  help='minimum depth')
     def cli(frame_sequence, camera, track_destination, point_cloud_destination,
-            file_to_load_corners, show, camera_poses_file, frame_1, frame_2):
+            file_to_load_corners, show, camera_poses_file, frame_1, frame_2,
+            reproj_err, min_angle, min_depth):
         """
         FRAME_SEQUENCE path to a video file or shell-like wildcard describing
         multiple images\n
@@ -454,7 +459,10 @@ def create_cli(track_and_calc_colors):
             corner_storage,
             frame_sequence,
             known_view_1,
-            known_view_2
+            known_view_2,
+            reproj_err,
+            min_angle,
+            min_depth
         )
         write_poses(poses, track_destination)
         write_point_cloud(point_cloud, point_cloud_destination)
@@ -480,4 +488,5 @@ def create_cli(track_and_calc_colors):
                     frame += 1
                 if key == 'q':
                     break
+
     return cli
