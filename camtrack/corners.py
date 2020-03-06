@@ -41,10 +41,15 @@ def _build_impl(frame_sequence: pims.FramesSequence,
     max_corners = pixels_count // 1500
     min_distance = block_size * 2
     feature_params = dict(maxCorners=max_corners,
-                          qualityLevel=0.01,
+                          qualityLevel=0.05,
                           minDistance=min_distance,
                           useHarrisDetector=False,
                           blockSize=block_size)
+
+    lk_params = dict(winSize=(15, 15),
+                     maxLevel=2,
+                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+
     prev_image = frame_sequence[0]
     prev_image *= 255
     prev_image = prev_image.astype(np.uint8)
@@ -57,11 +62,11 @@ def _build_impl(frame_sequence: pims.FramesSequence,
     for frame_ind, next_image in enumerate(frame_sequence[1:]):
         next_image *= 255
         next_image = next_image.astype(np.uint8)
-        corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_image, next_image, corners, None,
-                                                  winSize=(block_size, block_size), minEigThreshold=0.002)
-        good = st.reshape(-1).astype(np.bool)
+        next_corners = cv2.calcOpticalFlowPyrLK(prev_image, next_image, corners, None, **lk_params)[0].squeeze()
+        back_flow = cv2.calcOpticalFlowPyrLK(next_image, prev_image, next_corners, None, **lk_params)[0].squeeze()
+        good = np.abs(corners.squeeze() - back_flow).max(-1) < 0.2
         indices = indices[good]
-        corners = corners[good]
+        corners = next_corners[good]
 
         if corners.shape[0] < max_corners:
             feature_params['maxCorners'] = max_corners - corners.shape[0]
@@ -69,9 +74,10 @@ def _build_impl(frame_sequence: pims.FramesSequence,
             for cx, cy in corners.reshape(-1, 2):
                 cv2.circle(mask, (cx, cy), block_size, 0, -1)
             new_corners = cv2.goodFeaturesToTrack(next_image, mask=mask, **feature_params)
-            indices = np.append(indices, np.arange(max_index, max_index + new_corners.shape[0]))
-            max_index = indices[-1] + 1
-            corners = np.append(corners, new_corners).reshape((-1, 1, 2))
+            if new_corners is not None:
+                indices = np.append(indices, np.arange(max_index, max_index + new_corners.shape[0]))
+                max_index = indices[-1] + 1
+                corners = np.append(corners, new_corners).reshape((-1, 1, 2))
         prev_image = next_image
         _set_frame_corners(block_size, frame_ind + 1, indices, corners, builder)
 
