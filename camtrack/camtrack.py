@@ -9,7 +9,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 import cv2
 
-from _corners import filter_frame_corners
 from corners import CornerStorage
 from data3d import CameraParameters, PointCloud, Pose
 import frameseq
@@ -58,12 +57,14 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     if len(points) < 10:
         exit(0)
 
-    point_cloud_builder = PointCloudBuilder(ids, points)
-
     total_frames = len(corner_storage)
     tracked_mats = np.full(total_frames, None)
     tracked_mats[known_view_1[0]] = mat_1
     tracked_mats[known_view_2[0]] = mat_2
+
+    cloud_points = [None] * (corner_storage.max_corner_id() + 1)
+    for pt, i in zip(points, ids):
+        cloud_points[i] = pt
 
     updated = True
     while updated:
@@ -71,42 +72,13 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         for cur_frame, corners in enumerate(corner_storage):
             if tracked_mats[cur_frame] is not None:
                 continue
+            updated = updated or try_update(corner_storage, corners, cur_frame, intrinsic_mat, cloud_points, total_frames,
+                                            tracked_mats, triang_params)
 
-            _, comm1, comm2 = np.intersect1d(point_cloud_builder.ids.flatten(),
-                                             corners.ids.flatten(),
-                                             return_indices=True)
-            try:
-                if comm1.shape[0] < 10:
-                    raise
-                _, rvec, tvec, inliers = cv2.solvePnPRansac(point_cloud_builder.points[comm1],
-                                                            corners.points[comm2],
-                                                            intrinsic_mat,
-                                                            None)
-                inliers = inliers.astype(int)
-                inliers_len = len(inliers)
-                print(f'Tracking corners. [{cur_frame} frames of {total_frames}] {inliers_len} inliers')
-                if inliers_len > 0:
-                    tracked_mats[cur_frame] = rodrigues_and_translation_to_view_mat3x4(rvec, tvec)
-                    updated = True
-                else:
-                    continue
-            except:
-                print(f'Tracking corners. [{cur_frame} frames of {total_frames}] no inliers')
-                continue
-
-            filtered_corners = filter_frame_corners(corner_storage[cur_frame], inliers.flatten())
-
-            for another_frame in range(total_frames):
-                if another_frame == cur_frame or tracked_mats[another_frame] is None:
-                    continue
-                points, ids = build_and_triangulate_correspondences(intrinsic_mat,
-                                                                    corner_storage[another_frame],
-                                                                    tracked_mats[another_frame],
-                                                                    filtered_corners,
-                                                                    tracked_mats[cur_frame],
-                                                                    triang_params)
-                if len(ids) != 0:
-                    point_cloud_builder.add_points(ids, points)
+    point_cloud_builder = PointCloudBuilder(
+        ids=np.array([i for i, point in enumerate(cloud_points) if point is not None]),
+        points=np.array([point for point in cloud_points if point is not None])
+    )
 
     cur_mat = None
     for mat in tracked_mats:
@@ -133,8 +105,40 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         5.0
     )
     point_cloud = point_cloud_builder.build_point_cloud()
-    poses = list(map(view_mat3x4_to_pose, tracked_mats))
-    return poses, point_cloud
+    cloud_points = list(map(view_mat3x4_to_pose, tracked_mats))
+    return cloud_points, point_cloud
+
+
+def try_update(corner_storage, corners, cur_frame, intrinsic_mat, cloud_points, total_frames, tracked_mats, triang_params):
+    ids = corners.ids.flatten()
+    mask = np.array([cloud_points[id] is not None for id in ids])
+    try:
+        if corners.points[mask].shape[0] < 10:
+            raise
+        _, rvec, tvec, inliers = cv2.solvePnPRansac(np.array([cloud_points[ind] for ind in ids[mask]]),
+                                                    corners.points[mask], intrinsic_mat, None)
+        inliers = inliers.flatten()
+        print(f'Tracking corners. [{cur_frame} frames of {total_frames}] {len(inliers)} inliers')
+        for id in ids:
+            cloud_points[id] = None if id not in inliers else cloud_points[id]
+        tracked_mats[cur_frame] = rodrigues_and_translation_to_view_mat3x4(rvec, tvec)
+    except:
+        print(f'Tracking corners. [{cur_frame} frames of {total_frames}] no inliers')
+        return False
+    if tracked_mats[cur_frame] is not None:
+        for another_frame in range(total_frames):
+            if cur_frame == another_frame or tracked_mats[another_frame] is None:
+                continue
+            points, ids, = build_and_triangulate_correspondences(intrinsic_mat,
+                                                                 corners,
+                                                                 tracked_mats[cur_frame],
+                                                                 corner_storage[another_frame],
+                                                                 tracked_mats[another_frame],
+                                                                 triang_params)
+            for pt, id in zip(points, ids):
+                if cloud_points[id] is None:
+                    cloud_points[id] = pt
+    return tracked_mats[cur_frame] is not None
 
 
 def build_and_triangulate_correspondences(intrinsic_mat, corners_1, mat_1, corners_2, mat_2, triang_params):
